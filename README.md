@@ -1,1 +1,55 @@
 # fourlines
+
+Compact GPU status for the 4-GPU Mac Pro, designed for `tmux status-right`.
+
+`fourlines.sh` prints one line:
+
+```
+LOAD:<chart>|MEM:<chart>|TEMP:<chart>
+```
+
+Each braille character is 4 dots tall and 2 dots wide. The 4 dot rows map
+naturally to the 4 AMD GPUs (`card0`..`card3`), and the horizontal axis is the
+metric value from 0 to 100% — so each chart is four horizontal bars.
+
+```
+LOAD:⣶⣶⣶⣶⣶⡤|MEM:⣿⣿⣿⣿⣿⣿|TEMP:⣿⠋⠀⠀⠀⠀
+```
+
+Metrics (all read from sysfs, no root needed):
+
+| Chart | Source |
+|-------|--------|
+| LOAD  | `gpu_busy_percent` |
+| MEM   | `mem_info_vram_used / mem_info_vram_total` |
+| TEMP  | `hwmon/temp1_input` (edge sensor by default) |
+
+## Usage
+
+```sh
+./fourlines.sh
+```
+
+Add it to `~/.tmux.conf`:
+
+```tmux
+set -g status-right '#(/path/to/fourlines/fourlines.sh)'
+# or with something else on the right:
+set -g status-right '#(/path/to/fourlines/fourlines.sh) %H:%M'
+```
+
+## Tunables
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `FOUR_LINES_WIDTH` | `6` | Chart width in characters (2 dots per character) |
+| `FOUR_LINES_TEMP_MIN` | `30` | Temperature mapped to an empty bar |
+| `FOUR_LINES_TEMP_MAX` | `100` | Temperature mapped to a full bar |
+| `FOUR_LINES_TEMP_SENSOR` | `temp1_input` | `temp1_input` = edge, `temp2_input` = junction, `temp3_input` = HBM |
+| `FOUR_LINES_DEBUG` | `0` | Set to `1` to dump raw per-GPU values to stderr |
+
+## Reference files
+
+- `gpustat_v2.sh` — full per-card/fan status table for the same machine.
+- `metrics_monitor_braille.swift` — original compact braille monitor for
+  Apple Silicon.
