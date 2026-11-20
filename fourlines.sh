@@ -1,26 +1,39 @@
 #!/usr/bin/env bash
-# fourlines.sh — compact GPU status for tmux status-right.
+# fourlines.sh — compact CPU/GPU status for tmux status-right.
 #
-# Prints one line with three braille bar charts:
+# Prints one line with a narrow per-thread CPU chart followed by three GPU
+# braille bar charts:
 #
-#   LOAD:<chart>|MEM:<chart>|TEMP:<chart>
+#   CPU:<blocks>|LOAD:<chart>|MEM:<chart>|TEMP:<chart>
 #
-# Each braille character is 4 dots tall and 2 dots wide. The 4 dot rows are
-# mapped to the 4 AMD GPUs (card0..card3); the horizontal axis is the metric
-# value from 0 to 100%. No root is needed: all values come from sysfs, the
-# same files gpustat_v2.sh / rocm-smi read.
+# CPU: one horizontal line per SMT thread, grouped into blocks of four lines.
+# Each block is FOUR_LINES_CPU_WIDTH characters wide (default 2 => 4 levels
+# per thread). Blocks are separated with "|", e.g.
+#
+#   CPU:⣿⣿|⡇ |⡗⠒|⡗
+#
+# GPU: each braille character is 4 dots tall and 2 dots wide. The 4 dot rows
+# are mapped to the 4 AMD GPUs (card0..card3); the horizontal axis is the
+# metric value from 0 to 100%. No root is needed: all values come from sysfs,
+# the same files gpustat_v2.sh / rocm-smi read.
 #
 # Tunables (environment variables):
-#   FOUR_LINES_WIDTH       chart width in characters (default 6 => 12 levels)
-#   FOUR_LINES_TEMP_MIN    temperature mapped to an empty bar (default 30 °C)
-#   FOUR_LINES_TEMP_MAX    temperature mapped to a full bar   (default 100 °C)
-#   FOUR_LINES_TEMP_SENSOR hwmon file to use: temp1=edge (default),
-#                          temp2=junction, temp3=HBM
-#   FOUR_LINES_DEBUG       set to 1 to dump raw GPU values to stderr
+#   FOUR_LINES_WIDTH        GPU chart width in characters (default 6 => 12 levels)
+#   FOUR_LINES_CPU          set to 0 to hide the CPU chart (default 1)
+#   FOUR_LINES_CPU_WIDTH    CPU block width in characters (default 2 => 4 levels)
+#   FOUR_LINES_CPU_SAMPLE_MS  CPU sampling window in milliseconds (default 200)
+#   FOUR_LINES_TEMP_MIN     temperature mapped to an empty bar (default 30 °C)
+#   FOUR_LINES_TEMP_MAX     temperature mapped to a full bar   (default 100 °C)
+#   FOUR_LINES_TEMP_SENSOR  hwmon file to use: temp1=edge (default),
+#                           temp2=junction, temp3=HBM
+#   FOUR_LINES_DEBUG        set to 1 to dump raw GPU values to stderr
 
 set -euo pipefail
 
 WIDTH=${FOUR_LINES_WIDTH:-6}
+CPU_ENABLED=${FOUR_LINES_CPU:-1}
+CPU_WIDTH=${FOUR_LINES_CPU_WIDTH:-2}
+CPU_SAMPLE_MS=${FOUR_LINES_CPU_SAMPLE_MS:-200}
 TEMP_MIN=${FOUR_LINES_TEMP_MIN:-30}
 TEMP_MAX=${FOUR_LINES_TEMP_MAX:-100}
 TEMP_SENSOR=${FOUR_LINES_TEMP_SENSOR:-temp1_input}
@@ -28,6 +41,12 @@ TEMP_SENSOR=${FOUR_LINES_TEMP_SENSOR:-temp1_input}
 # Sanity-check the tunables so bad env values cannot break the arithmetic.
 if ! [[ $WIDTH =~ ^[0-9]+$ ]] || ((WIDTH < 1)); then
   WIDTH=6
+fi
+if ! [[ $CPU_WIDTH =~ ^[0-9]+$ ]] || ((CPU_WIDTH < 1)); then
+  CPU_WIDTH=2
+fi
+if ! [[ $CPU_SAMPLE_MS =~ ^[0-9]+$ ]] || ((CPU_SAMPLE_MS < 20)); then
+  CPU_SAMPLE_MS=200
 fi
 if ! [[ $TEMP_MIN =~ ^-?[0-9]+$ ]] || ! [[ $TEMP_MAX =~ ^-?[0-9]+$ ]] || ((TEMP_MAX <= TEMP_MIN)); then
   TEMP_MIN=30
@@ -42,8 +61,8 @@ DOTS=$((WIDTH * 2))
 LEFT_DOTS=(1 2 4 64)
 RIGHT_DOTS=(8 16 32 128)
 
-# Build a horizontal bar chart. Arguments: width, then one 0..DOTS level per
-# dot row (GPU). Missing levels are treated as 0.
+# Build a horizontal bar chart. Arguments: width, then one 0..(width*2) level
+# per dot row. Missing levels are treated as 0.
 chart() {
   local width=$1
   shift
@@ -73,6 +92,79 @@ chart() {
     out+=$ch
   done
   printf '%s' "$out"
+}
+
+# Build a chart for more than four rows by splitting the levels into groups of
+# four and joining the resulting braille blocks with "|".
+chart_blocks() {
+  local width=$1
+  shift
+  local -a levels=("$@")
+  local out="" i
+
+  for ((i = 0; i < ${#levels[@]}; i += 4)); do
+    ((i > 0)) && out+='|'
+    out+=$(chart "$width" "${levels[@]:i:4}")
+  done
+  printf '%s' "$out"
+}
+
+# Per-CPU cumulative counters from /proc/stat. Guest/guest_nice are already
+# included in user/nice, so only the first eight numeric fields are needed.
+read_cpu_counters() {
+  awk '/^cpu[0-9]+[[:space:]]/ {
+    printf "%s %s %s %s %s %s %s %s %s\n", $1, $2, $3, $4, $5, $6, $7, $8, $9
+  }' /proc/stat 2>/dev/null
+}
+
+# Compute one 0..(CPU_WIDTH*2) level per SMT thread. /proc/stat contains
+# cumulative counters, so take two snapshots separated by CPU_SAMPLE_MS.
+collect_cpu_levels() {
+  local -a result=()
+  local -A prev=()
+  local -A busy_by_cpu=()
+  local -A total_by_cpu=()
+  local name u n s i w irq sirq st
+  local pu pn ps pi pw pirq psirq pst
+  local busy idle total level
+  local cpu_dots=$((CPU_WIDTH * 2))
+  local sleep_s
+
+  while read -r name u n s i w irq sirq st; do
+    prev["$name"]="$u $n $s $i $w $irq $sirq $st"
+  done < <(read_cpu_counters)
+
+  ((${#prev[@]} > 0)) || return 0
+
+  printf -v sleep_s '%d.%03d' $((CPU_SAMPLE_MS / 1000)) $((CPU_SAMPLE_MS % 1000))
+  sleep "$sleep_s"
+
+  while read -r name u n s i w irq sirq st; do
+    [ -n "${prev[$name]:-}" ] || continue
+    read -r pu pn ps pi pw pirq psirq pst <<< "${prev[$name]}"
+
+    busy=$(((u - pu) + (n - pn) + (s - ps) + (irq - pirq) + (sirq - psirq) + (st - pst)))
+    idle=$(((i - pi) + (w - pw)))
+    total=$((busy + idle))
+
+    # A counter reset (reboot, CPU hotplug) would produce nonsense; skip it.
+    ((busy < 0)) && busy=0
+    ((total < 1)) && total=1
+
+    busy_by_cpu["$name"]=$busy
+    total_by_cpu["$name"]=$total
+  done < <(read_cpu_counters)
+
+  for name in $(printf '%s\n' "${!total_by_cpu[@]}" | sort -V); do
+    busy=${busy_by_cpu[$name]}
+    total=${total_by_cpu[$name]}
+    level=$(((busy * cpu_dots + total / 2) / total))
+    ((level < 0)) && level=0
+    ((level > cpu_dots)) && level=$cpu_dots
+    result+=("$level")
+  done
+
+  ((${#result[@]} > 0)) && printf '%s\n' "${result[@]}"
 }
 
 load_levels=()
@@ -131,7 +223,19 @@ if [ "${FOUR_LINES_DEBUG:-0}" = 1 ] && [ "${#debug[@]}" -gt 0 ]; then
   printf '%s\n' "${debug[@]}" >&2
 fi
 
-printf 'LOAD:%s|MEM:%s|TEMP:%s\n' \
-  "$(chart "$WIDTH" "${load_levels[@]}")" \
-  "$(chart "$WIDTH" "${mem_levels[@]}")" \
-  "$(chart "$WIDTH" "${temp_levels[@]}")"
+cpu_levels=()
+if [ "$CPU_ENABLED" != 0 ]; then
+  while IFS= read -r level; do
+    [ -n "$level" ] && cpu_levels+=("$level")
+  done < <(collect_cpu_levels)
+fi
+
+segments=()
+if [ "${#cpu_levels[@]}" -gt 0 ]; then
+  segments+=("CPU:$(chart_blocks "$CPU_WIDTH" "${cpu_levels[@]}")")
+fi
+segments+=("LOAD:$(chart "$WIDTH" "${load_levels[@]}")")
+segments+=("MEM:$(chart "$WIDTH" "${mem_levels[@]}")")
+segments+=("TEMP:$(chart "$WIDTH" "${temp_levels[@]}")")
+
+printf '%s\n' "$(IFS='|'; printf '%s' "${segments[*]}")"
