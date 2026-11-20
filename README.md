@@ -53,6 +53,24 @@ set -g status-right '#(/path/to/fourlines/fourlines.sh)'
 set -g status-right '#(/path/to/fourlines/fourlines.sh) %H:%M'
 ```
 
+## Python version
+
+`fourlines.py` is a stdlib-only Python 3.10+ port of `fourlines.sh` with the
+same output, tunables, and defaults. It reads `/proc` and sysfs directly and
+avoids spawning helper processes.
+
+```sh
+./fourlines.py
+```
+
+Use it in tmux the same way:
+
+```tmux
+set -g status-right '#(/path/to/fourlines/fourlines.py)'
+```
+
+No third-party packages are required.
+
 ## Tunables
 
 | Variable | Default | Meaning |
