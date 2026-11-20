@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # fourlines.sh — compact CPU/GPU status for tmux status-right.
 #
-# Prints one line with a narrow per-thread CPU chart followed by three GPU
-# braille bar charts:
+# Prints one line with a narrow per-thread CPU chart followed by the GPU
+# metrics, grouped into bracketed sections:
 #
-#   CPU:<blocks>|LOAD:<chart>|MEM:<chart>|TEMP:<chart>
+#   CPU:[<blocks>] GPU:[LOAD:<chart>|MEM:<chart>|TEMP:<chart>]
 #
 # CPU: one horizontal line per SMT thread, grouped into blocks of four lines.
 # Each block is FOUR_LINES_CPU_WIDTH characters wide (default 2 => 4 levels
@@ -232,10 +232,14 @@ fi
 
 segments=()
 if [ "${#cpu_levels[@]}" -gt 0 ]; then
-  segments+=("CPU:$(chart_blocks "$CPU_WIDTH" "${cpu_levels[@]}")")
+  segments+=("CPU:[$(chart_blocks "$CPU_WIDTH" "${cpu_levels[@]}")]")
 fi
-segments+=("LOAD:$(chart "$WIDTH" "${load_levels[@]}")")
-segments+=("MEM:$(chart "$WIDTH" "${mem_levels[@]}")")
-segments+=("TEMP:$(chart "$WIDTH" "${temp_levels[@]}")")
 
-printf '%s\n' "$(IFS='|'; printf '%s' "${segments[*]}")"
+gpu_segments=(
+  "LOAD:$(chart "$WIDTH" "${load_levels[@]}")"
+  "MEM:$(chart "$WIDTH" "${mem_levels[@]}")"
+  "TEMP:$(chart "$WIDTH" "${temp_levels[@]}")"
+)
+segments+=("GPU:[$(IFS='|'; printf '%s' "${gpu_segments[*]}")]")
+
+printf '%s\n' "$(IFS=' '; printf '%s' "${segments[*]}")"

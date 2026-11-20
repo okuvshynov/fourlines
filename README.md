@@ -2,10 +2,10 @@
 
 Compact CPU/GPU status for the 4-GPU Mac Pro, designed for `tmux status-right`.
 
-`fourlines.sh` prints one line:
+`fourlines.sh` prints one line with two bracketed groups:
 
 ```
-CPU:<blocks>|LOAD:<chart>|MEM:<chart>|TEMP:<chart>
+CPU:[<blocks>] GPU:[LOAD:<chart>|MEM:<chart>|TEMP:<chart>]
 ```
 
 ## CPU
@@ -15,7 +15,7 @@ blocks of four lines. Each block is 2 characters wide by default, giving 4
 levels per thread; blocks are separated with `|`:
 
 ```
-CPU:⣿⣿|⡇ |⡗⠒|⡗
+CPU:[⣿⣿|⡇ |⡗⠒|⡗]
 ```
 
 The 16-core / 32-thread Xeon is sampled twice from `/proc/stat` over a short
@@ -28,7 +28,7 @@ naturally to the 4 AMD GPUs (`card0`..`card3`), and the horizontal axis is the
 metric value from 0 to 100% — so each chart is four horizontal bars.
 
 ```
-LOAD:⣶⣶⣶⣶⣶⡤|MEM:⣿⣿⣿⣿⣿⣿|TEMP:⣿⠋⠀⠀⠀⠀
+CPU:[⠛⠛|⠒⠒|⠀⠀|⠀⠀|⠀⠀|⠛⠛|⠀⠀|⣀⣀] GPU:[LOAD:⣶⣶⣶⣶⣶⡤|MEM:⣿⣿⣿⣿⣿⣿|TEMP:⣿⠋⠀⠀⠀⠀]
 ```
 
 Metrics (all read from sysfs, no root needed):
